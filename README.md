@@ -2,7 +2,7 @@
 
 A small Swift package that models the loop from [Depop's XCTest → Swift Testing migration](https://engineering.depop.com/from-xctest-to-swift-testing-migrating-10-000-unit-tests-at-depop-4bc0b438eb12): a deterministic converter does the rewrite, and a coding agent owns everything around it, inside limits a lead writes once.
 
-Article: (added after publish)
+Article: [Don't Let Your Coding Agent Convert Your XCTests. Let It Run the Swift Testing Migration Loop.](https://medium.com/@er.rajatlakhina/dont-let-your-coding-agent-convert-your-xctests-let-it-run-the-swift-testing-migration-loop-da907fdafdfe)
 
 <img src="Demo/Screenshots/targets.png" alt="MigrationLoop demo on the iPhone 17 Pro Simulator: six scripted test targets, 1 auto-merge, 3 human review, 2 handed back." width="320">
 
@@ -96,7 +96,7 @@ One `xcodebuild` process per run is the slow path. `xcodebuild` also has `-test-
 - `rm -rf .build && swift build -Xswiftc -warnings-as-errors`: clean (Xcode 27.2, Swift 6.4.2, Swift 6 language mode).
 - `swift test`: 45 tests (68 cases including parameterized arguments), 0 failures.
 - `Demo.xcodeproj` built and run on an iPhone 17 Pro Simulator (iOS 27.2) created for this run with `xcrun simctl create`, via `SIM_UDID=<udid> Scripts/simulator-screenshots.sh`; the screenshots above come from that run.
-- CI: (added after the first CI run)
+- CI: green on GitHub's macos-15 runners ([run 45150345202](https://github.com/rajatslakhina/agent-migration-loop-article-demo/actions/runs/45150345202): library build with warnings as errors and tests, plus the demo built, launched and screenshotted on the iOS Simulator).
 
 ## Sources
 
