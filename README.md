@@ -111,7 +111,7 @@ One `xcodebuild` process per run is the slow path. `xcodebuild` also has `-test-
 - `rm -rf .build && swift build -Xswiftc -warnings-as-errors`: clean (Xcode 27.2, Swift 6.4.2, Swift 6 language mode).
 - `swift test`: 72 tests (95 cases including parameterized arguments), 0 failures.
 - `Demo.xcodeproj` built and run on an iPhone 17 Pro Simulator (iOS 27.2) created for this run with `xcrun simctl create`, via `SIM_UDID=<udid> Scripts/simulator-screenshots.sh`; the screenshots above come from that run.
-- CI (v1.0.0 run, updated after the v1.1.0 push): green on GitHub's macos-15 runners ([run 45150345202](https://github.com/rajatslakhina/agent-migration-loop-article-demo/actions/runs/45150345202): library build with warnings as errors and tests, plus the demo built, launched and screenshotted on the iOS Simulator).
+- CI for v1.1.0: not run yet. [Run 45423177812](https://github.com/rajatslakhina/agent-migration-loop-article-demo/actions/runs/45423177812) was cancelled three times before it started, because no GitHub-hosted macOS arm64 runner picked it up ("The job was not acquired by Runner of type hosted even after multiple attempts"); no build or test step ran. The local results above are for v1.1.0. The last CI run, for v1.0.0, was green on macos-15 ([run 45150345202](https://github.com/rajatslakhina/agent-migration-loop-article-demo/actions/runs/45150345202): library build with warnings as errors and tests, plus the demo on the iOS Simulator). This line will be updated when the v1.1.0 run completes.
 
 ## Sources
 
