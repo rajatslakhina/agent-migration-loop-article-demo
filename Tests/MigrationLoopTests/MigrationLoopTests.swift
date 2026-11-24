@@ -64,7 +64,9 @@ private func outcomes(_ reports: [LoopReport]) -> [String: String] {
 
     @Test func instructionsListEveryRuleTheGuardChecks() {
         let text = LoopContract().renderInstructions()
-        let rules = FixGuard.disablingMarkers + FixGuard.testConfigurationExtensions
+        let rules = FixGuard.disablingMarkers + FixGuard.testConfigurationExtensions + FixGuard.defaultAssertionMarkers
+        #expect(text.contains("no net loss of assertion lines"))
+        #expect(text.contains("as many assertion lines as the XCTest code it replaced"))
         for rule in rules {
             #expect(text.contains(rule), "missing \(rule)")
         }
@@ -156,6 +158,136 @@ private func outcomes(_ reports: [LoopReport]) -> [String: String] {
         let patch = Patch(files: [FileChange(path: testFile, removed: [line]),
                                   FileChange(path: other, added: [line])])
         #expect(FixGuard.check(patch, contract: contract).violations == [.disablesTest(path: other, marker: ".disabled")])
+    }
+
+    @Test func rejectsDeletingAnAssertion() {
+        let patch = Patch(files: [FileChange(path: testFile, removed: ["    #expect(cache.count == 1)"])])
+        let report = FixGuard.check(patch, contract: contract)
+        #expect(report.violations == [.removesAssertions(count: 1)])
+        #expect(report.assertionChanges.removed == [AssertionLine(path: testFile, code: "#expect(cache.count == 1)")])
+        #expect(report.assertionChanges.lines == ["\(testFile): - #expect(cache.count == 1)"])
+    }
+
+    @Test func commentingOutAnAssertionIsARemoval() {
+        let patch = Patch(files: [FileChange(path: testFile, added: ["// #expect(cache.count == 1)"],
+                                             removed: ["#expect(cache.count == 1)"])])
+        #expect(FixGuard.check(patch, contract: contract).violations == [.removesAssertions(count: 1)])
+    }
+
+    @Test func rewordedAssertionIsAllowedButListed() {
+        let patch = Patch(files: [FileChange(path: testFile, added: ["#expect(cache.count >= 1)"],
+                                             removed: ["#expect(cache.count == 1)"])])
+        let report = FixGuard.check(patch, contract: contract)
+        #expect(report.isClean)
+        #expect(report.assertionChanges.lines == ["\(testFile): - #expect(cache.count == 1)",
+                                                 "\(testFile): + #expect(cache.count >= 1)"])
+    }
+
+    @Test func reindentedAssertionInTheSameFileIsNotAChange() {
+        let patch = Patch(files: [FileChange(path: testFile, added: ["        #expect(a == b)"],
+                                             removed: ["    #expect(a == b)  // was flaky"])])
+        let report = FixGuard.check(patch, contract: contract)
+        #expect(report.isClean)
+        #expect(report.assertionChanges.isEmpty)
+    }
+
+    @Test func assertionMovedToAnotherFileIsListedNotRejected() {
+        let other = "Features/Search/SearchTests/SearchRankingTests.swift"
+        let patch = Patch(files: [FileChange(path: testFile, removed: ["#expect(a == b)"]),
+                                  FileChange(path: other, added: ["#expect(a == b)"])])
+        let report = FixGuard.check(patch, contract: contract)
+        #expect(report.isClean)
+        #expect(report.assertionChanges.lines == ["\(testFile): - #expect(a == b)", "\(other): + #expect(a == b)"])
+    }
+
+    @Test func assertionsAreCountedAsAMultiset() {
+        let patch = Patch(files: [FileChange(path: testFile, added: ["#expect(a)"],
+                                             removed: ["#expect(a)", "#expect(a)"])])
+        #expect(FixGuard.check(patch, contract: contract).violations == [.removesAssertions(count: 1)])
+    }
+
+    @Test func assertionMovedIntoANonSwiftFileIsARemoval() {
+        let patch = Patch(files: [FileChange(path: testFile, removed: ["#expect(a)"]),
+                                  FileChange(path: testFile + ".disabled", added: ["#expect(a)"])])
+        #expect(FixGuard.check(patch, contract: contract).violations == [.removesAssertions(count: 1)])
+    }
+
+    @Test func addedAssertionIsCleanAndListed() {
+        let patch = Patch(files: [FileChange(path: testFile, added: ["#expect(cache.isEmpty) // reset check"])])
+        let report = FixGuard.check(patch, contract: contract)
+        #expect(report.isClean)
+        #expect(report.assertionChanges.lines == ["\(testFile): + #expect(cache.isEmpty)"])
+    }
+
+    @Test func droppedTestNameAndAssertionAreBothReported() {
+        let patch = Patch(files: [FileChange(path: testFile, added: ["@Test func placeholder() {}"],
+                                             removed: ["@Test func real() {", "#expect(x)"])])
+        #expect(FixGuard.check(patch, contract: contract).violations == [.dropsTest(name: "real"), .removesAssertions(count: 1)])
+    }
+
+    @Test func customAssertionHelpersCount() {
+        let helpers = LoopContract(assertionMarkers: FixGuard.defaultAssertionMarkers + ["assertEvent("])
+        let patch = Patch(files: [FileChange(path: testFile, removed: ["assertEvent(.tap, in: events)"])])
+        #expect(FixGuard.check(patch, contract: helpers).violations == [.removesAssertions(count: 1)])
+        #expect(FixGuard.check(patch, contract: contract).isClean)
+        #expect(LoopContract(assertionMarkers: [""]).assertionMarkers == FixGuard.defaultAssertionMarkers)
+        #expect(LoopContract(assertionMarkers: [" ", "\t"]).assertionMarkers == FixGuard.defaultAssertionMarkers)
+        #expect(LoopContract(assertionMarkers: ["", "assertEvent("]).assertionMarkers == ["assertEvent("])
+        #expect(helpers.renderInstructions().contains("assertEvent("))
+    }
+
+    @Test func aDoubleSlashInsideAStringIsNotAComment() {
+        let line = "#expect(url.absoluteString == \"https://example.com/a\") // host check"
+        #expect(FixGuard.code(line) == "#expect(url.absoluteString == \"https://example.com/a\")")
+        let patch = Patch(files: [FileChange(path: testFile, removed: [line])])
+        #expect(FixGuard.check(patch, contract: contract).violations == [.removesAssertions(count: 1)])
+    }
+
+    @Test func anEscapedQuoteDoesNotEndTheString() {
+        #expect(FixGuard.code("#expect(s == \"a\\\"//b\") // c") == "#expect(s == \"a\\\"//b\")")
+    }
+
+    @Test func aMultiLineStringLineIsKeptWhole() {
+        // Without the rule, the quote count would put this `//` outside a string.
+        let line = ##"#expect(s == """a"b // c"##
+        #expect(FixGuard.stripComment(line) == line)
+    }
+
+    @Test func deletingAnInterpolatedLineWithAnAssertionIsCounted() {
+        // Without the `\(` rule, the nested quotes would cut this line before the marker.
+        let line = #"let s = "\(a ?? "//")"; #expect(ok)"#
+        #expect(FixGuard.code(line) == line)
+        let patch = Patch(files: [FileChange(path: testFile, removed: [line])])
+        #expect(FixGuard.check(patch, contract: contract).violations == [.removesAssertions(count: 1)])
+    }
+
+    @Test func deletingAnExtendedRegexLineWithAnAssertionIsCounted() {
+        // Without the `#/` rule, the quote count would cut this line before the marker.
+        let line = ##"let r = #/a"/#; let s = "x//"; #expect(ok)"##
+        #expect(FixGuard.code(line) == line)
+        let patch = Patch(files: [FileChange(path: testFile, removed: [line])])
+        #expect(FixGuard.check(patch, contract: contract).violations == [.removesAssertions(count: 1)])
+    }
+
+    @Test func aCommentHiddenBehindARawStringDoesNotAddATest() {
+        let patch = Patch(files: [FileChange(path: testFile,
+                                             added: [##"let s = #"\"# // @Test func flaky() {"##],
+                                             removed: ["@Test func flaky() {"])])
+        #expect(FixGuard.check(patch, contract: contract).violations == [.removesTests(count: 1)])
+    }
+
+    @Test func aCommentHiddenBehindARegexLiteralDoesNotAddAnAssertion() {
+        let patch = Patch(files: [FileChange(path: testFile,
+                                             added: [##"let r = #/"/# // #expect(x == 1)"##],
+                                             removed: ["#expect(x == 1)"])])
+        #expect(FixGuard.check(patch, contract: contract).violations == [.removesAssertions(count: 1)])
+    }
+
+    @Test func deletingARawStringLineWithAnAssertionIsCounted() {
+        let line = ##"let s = #"a"b//c"#; #expect(ok)"##
+        #expect(FixGuard.code(line) == line)
+        let patch = Patch(files: [FileChange(path: testFile, removed: [line])])
+        #expect(FixGuard.check(patch, contract: contract).violations == [.removesAssertions(count: 1)])
     }
 
     @Test func aTrailingCommentDoesNotDeclareATest() {
@@ -252,6 +384,85 @@ private func outcomes(_ reports: [LoopReport]) -> [String: String] {
         let executor = ScriptedExecutor(script: .init(conversion: Patch(files: [FileChange(path: path, added: ["x"])])))
         let report = MigrationLoop(contract: LoopContract(testScopeSuffixes: ["Specs"])).run(target: "T", executor: executor)
         #expect(report.outcome == .humanReview(reasons: ["Converter changed \(path), outside the test scope"]))
+    }
+
+    @Test func converterThatDropsAnAssertionNeedsAHuman() {
+        let conversion = Patch(files: [FileChange(path: testFile,
+                                                  added: ["@Test func a() {", "#expect(x == 1)"],
+                                                  removed: ["func testA() {", "XCTAssertEqual(x, 1)", "XCTAssertNotNil(y)"])])
+        let report = MigrationLoop().run(target: "T", executor: ScriptedExecutor(script: .init(conversion: conversion)))
+        #expect(report.outcome == .humanReview(reasons: [
+            "Converter changed the assertion count in \(testFile): 2 XCTest assertion line(s) became 1"]))
+        #expect(report.assertionReview == ["Converter, \(testFile): 2 assertion line(s) became 1"])
+        #expect(report.converterAssertionCounts == [ConverterAssertionCount(path: testFile, before: 2, after: 1)])
+    }
+
+    @Test func converterCountIsCheckedPerFile() {
+        let other = "Features/Search/SearchTests/SearchRankingTests.swift"
+        let conversion = Patch(files: [
+            FileChange(path: testFile, added: [], removed: ["XCTAssertTrue(a)"]),
+            FileChange(path: other, added: ["#expect(b)", "#expect(c)"], removed: ["XCTAssertTrue(b)"])
+        ])
+        let report = MigrationLoop().run(target: "T", executor: ScriptedExecutor(script: .init(conversion: conversion)))
+        #expect(report.outcome == .humanReview(reasons: [
+            "Converter changed the assertion count in \(testFile): 1 XCTest assertion line(s) became 0",
+            "Converter changed the assertion count in \(other): 1 XCTest assertion line(s) became 2"]))
+        #expect(report.assertionReview == ["Converter, \(testFile): 1 assertion line(s) became 0",
+                                           "Converter, \(other): 1 assertion line(s) became 2"])
+    }
+
+    @Test func agentFixThatRewordsAnAssertionIsFlaggedForReview() throws {
+        let fix = AgentFix(patch: Patch(files: [FileChange(path: testFile, added: ["#expect(n >= 1)"],
+                                                           removed: ["#expect(n == 1)"])]), note: "Relaxed the count check.")
+        let executor = ScriptedExecutor(script: .init(conversion: .empty, testPhases: [["A/b()": 3], [:]], testFixes: [fix]))
+        let report = MigrationLoop().run(target: "T", executor: executor)
+        guard case .humanReview(let reasons) = report.outcome else { Issue.record("expected human review"); return }
+        #expect(reasons.contains("Fix 1 (failing tests) changed assertion lines; compare them before merging"))
+        #expect(report.assertionReview == ["Fix 1 (failing tests), \(testFile): - #expect(n == 1)",
+                                           "Fix 1 (failing tests), \(testFile): + #expect(n >= 1)"])
+        #expect(report.fixAssertionChanges.map(\.rejected) == [false])
+        #expect(report.fixAssertionChanges.first?.diff.lines.count == 2)
+    }
+
+    @Test func converterCheckUsesTheContractsMarkers() {
+        let conversion = Patch(files: [FileChange(path: testFile, added: ["#expect(a)"],
+                                                  removed: ["XCTAssertTrue(a)", "assertEvent(.tap, in: events)"])])
+        let helpers = LoopContract(assertionMarkers: FixGuard.defaultAssertionMarkers + ["assertEvent("])
+        let custom = MigrationLoop(contract: helpers).run(target: "T", executor: ScriptedExecutor(script: .init(conversion: conversion)))
+        #expect(custom.assertionReview == ["Converter, \(testFile): 2 assertion line(s) became 1"])
+        let plain = MigrationLoop().run(target: "T", executor: ScriptedExecutor(script: .init(conversion: conversion)))
+        #expect(plain.outcome == .autoMerge)
+    }
+
+    @Test func converterAddsInANonSwiftFileDoNotCount() {
+        let path = testFile + ".orig"
+        let conversion = Patch(files: [FileChange(path: path, added: ["#expect(a)"], removed: ["XCTAssertTrue(a)"])])
+        let report = MigrationLoop().run(target: "T", executor: ScriptedExecutor(script: .init(conversion: conversion)))
+        #expect(report.assertionReview == ["Converter, \(path): 1 assertion line(s) became 0"])
+    }
+
+    @Test func buildFixThatChangesAnAssertionIsLabelledWithItsPhase() throws {
+        let fix = AgentFix(patch: Patch(files: [FileChange(path: testFile, added: ["#expect(try value() == 1)"],
+                                                           removed: ["#expect(value() == 1)"])]), note: "Added try.")
+        let executor = ScriptedExecutor(script: .init(conversion: .empty, builds: [.failed(errors: ["e"])], buildFixes: [fix]))
+        let report = MigrationLoop().run(target: "T", executor: executor)
+        guard case .humanReview(let reasons) = report.outcome else { Issue.record("expected human review"); return }
+        #expect(reasons.contains("Fix 1 (build errors) changed assertion lines; compare them before merging"))
+        #expect(report.assertionReview == ["Fix 1 (build errors), \(testFile): - #expect(value() == 1)",
+                                           "Fix 1 (build errors), \(testFile): + #expect(try value() == 1)"])
+    }
+
+    @Test func rejectedFixListsTheAssertionsItRemoved() {
+        let fix = AgentFix(patch: Patch(files: [FileChange(path: testFile, added: ["// flaky"],
+                                                           removed: ["#expect(n == 1)"])]), note: "Dropped the check.")
+        let executor = ScriptedExecutor(script: .init(conversion: .empty, testPhases: [["A/b()": 3]], testFixes: [fix]))
+        let report = MigrationLoop().run(target: "T", executor: executor)
+        #expect(report.outcome == .handBack(reason: "Agent fix rejected by the guard: removes 1 assertion line"))
+        #expect(report.assertionReview == ["Rejected fix 1 (failing tests), \(testFile): - #expect(n == 1)"])
+        #expect(report.fixAssertionChanges == [FixAssertionChange(
+            attempt: 1, phase: .failingTests, rejected: true,
+            diff: AssertionDiff(removed: [AssertionLine(path: testFile, code: "#expect(n == 1)")], added: []))])
+        #expect(executor.applyCalls == 0)
     }
 
     @Test func zeroBudgetHandsBackWithoutCallingTheAgent() {
@@ -362,6 +573,15 @@ private func outcomes(_ reports: [LoopReport]) -> [String: String] {
         #expect(checkout.outcome == .handBack(reason: "Agent fix rejected by the guard: removes 1 test"))
         #expect(checkout.appliedFixes.isEmpty)
         #expect(checkout.events.contains { $0.detail == "PaymentSheetTests/retriesDeclinedCard() failed in 14 of 100 runs (flaky)" })
+    }
+
+    @Test func onlyCheckoutHasAssertionsToCompare() throws {
+        let checkout = try #require(reports.first { $0.target == "CheckoutTests" })
+        #expect(checkout.assertionReview == [
+            "Rejected fix 1 (failing tests), Features/Checkout/CheckoutTests/PaymentSheetTests.swift: - #expect(await sheet.retry() == .succeeded)"])
+        for report in reports where report.target != "CheckoutTests" {
+            #expect(report.assertionReview.isEmpty, "\(report.target)")
+        }
     }
 
     @Test func notificationsTripsTheCircuitBreakerAfterTwoFixes() throws {

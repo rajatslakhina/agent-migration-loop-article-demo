@@ -51,5 +51,6 @@ shoot checkout-timeline -target CheckoutTests
 shoot contract -tab contract
 # Keep only the top of two screens, so the floating tab bar does not cover content.
 swift Scripts/croptop.swift "$OUT/profile-timeline.png" "$OUT/profile-timeline.png" 2340
-swift Scripts/croptop.swift "$OUT/contract.png" "$OUT/contract.png" 1830
+swift Scripts/croptop.swift "$OUT/checkout-timeline.png" "$OUT/checkout-timeline.png" 2340
+swift Scripts/croptop.swift "$OUT/contract.png" "$OUT/contract.png" 1900
 ls -la "$OUT"

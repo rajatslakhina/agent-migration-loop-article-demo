@@ -78,7 +78,8 @@ public struct LoopEvent: Equatable, Sendable, Identifiable {
 }
 
 public enum Outcome: Equatable, Sendable {
-    /// Test/mock-only diff, no agent edits, every repeated run green.
+    /// Test/mock-only diff, each converted file's assertion-line count kept, no agent edits,
+    /// every repeated run green.
     case autoMerge
     /// The PR is opened but tagged for a human, with the reasons.
     case humanReview(reasons: [String])
@@ -101,4 +102,51 @@ public struct LoopReport: Equatable, Sendable {
     /// Agent fixes that passed `FixGuard` and were handed to `LoopExecutor.apply(_:target:)`.
     public let appliedFixes: [AgentFix]
     public let followUps: [String]
+    /// What a reviewer should compare: each agent fix's changed assertion lines, as
+    /// `Fix N (phase), path: - old` / `path: + new` (`Rejected fix N …` for a fix the guard
+    /// rejected), and each converted file whose assertion-line count changed, as
+    /// `Converter, path: X assertion line(s) became Y`.
+    public let assertionReview: [String]
+    /// The same converter entries as data, for a harness that posts its own review comments.
+    public let converterAssertionCounts: [ConverterAssertionCount]
+    /// The same agent-fix entries as data, rejected fixes included.
+    public let fixAssertionChanges: [FixAssertionChange]
+}
+
+/// A converted file whose assertion-line count changed, which sends the target to review.
+public struct ConverterAssertionCount: Equatable, Sendable {
+    public let path: String
+    /// Assertion lines the converter removed from the file (the XCTest side).
+    public let before: Int
+    /// Assertion lines it added (counted only in `.swift` files).
+    public let after: Int
+
+    public init(path: String, before: Int, after: Int) {
+        self.path = path
+        self.before = before
+        self.after = after
+    }
+}
+
+/// The phase an agent fix belongs to. The raw value is the text used in reports.
+public enum FixPhase: String, Equatable, Sendable {
+    case buildErrors = "build errors"
+    case failingTests = "failing tests"
+}
+
+/// The assertion lines one agent fix changed, whether or not the guard accepted it.
+public struct FixAssertionChange: Equatable, Sendable {
+    /// The attempt number within its phase, starting at 1.
+    public let attempt: Int
+    public let phase: FixPhase
+    /// True when `FixGuard` rejected the fix and the target was handed back.
+    public let rejected: Bool
+    public let diff: AssertionDiff
+
+    public init(attempt: Int, phase: FixPhase, rejected: Bool, diff: AssertionDiff) {
+        self.attempt = attempt
+        self.phase = phase
+        self.rejected = rejected
+        self.diff = diff
+    }
 }

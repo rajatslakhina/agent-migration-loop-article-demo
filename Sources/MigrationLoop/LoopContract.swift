@@ -1,7 +1,7 @@
 /// The one place a lead writes down how a migration loop works.
 ///
 /// `renderInstructions(target:)` is what the agent is told, and `MigrationLoop`
-/// enforces the same run count, fix budget and test scope. Change one of those here and
+/// enforces the same run count, fix budget, test scope and assertion markers. Change one of those here and
 /// the prompt and the enforcement change together, so they cannot drift apart. The
 /// commands are only rendered into the prompt; a real `LoopExecutor` should read them
 /// from the same contract.
@@ -17,6 +17,10 @@ public struct LoopContract: Equatable, Sendable {
     /// A changed file is in test scope when one of its directories ends with one of these.
     /// At least one: an empty list falls back to the default `["Tests", "Mocks"]`.
     public let testScopeSuffixes: [String]
+    /// Text that marks an assertion line. The list replaces the defaults, so to count your own
+    /// helpers too, pass `FixGuard.defaultAssertionMarkers + ["assertEvent("]`. At least one:
+    /// an empty list falls back to `FixGuard.defaultAssertionMarkers`.
+    public let assertionMarkers: [String]
 
     public init(
         converterCommand: String = "swift-testing-revolutionary <test-target-dir>",
@@ -24,7 +28,8 @@ public struct LoopContract: Equatable, Sendable {
         testCommand: String = "xcodebuild test-without-building -scheme <scheme>",
         repetitions: Int = 100,
         maxFixAttempts: Int = 2,
-        testScopeSuffixes: [String] = ["Tests", "Mocks"]
+        testScopeSuffixes: [String] = ["Tests", "Mocks"],
+        assertionMarkers: [String] = FixGuard.defaultAssertionMarkers
     ) {
         self.converterCommand = converterCommand
         self.buildCommand = buildCommand
@@ -33,6 +38,8 @@ public struct LoopContract: Equatable, Sendable {
         self.maxFixAttempts = max(0, maxFixAttempts)
         let suffixes = testScopeSuffixes.filter { !$0.isEmpty }
         self.testScopeSuffixes = suffixes.isEmpty ? ["Tests", "Mocks"] : suffixes
+        let markers = assertionMarkers.filter { !FixGuard.withoutWhitespace($0).isEmpty }
+        self.assertionMarkers = markers.isEmpty ? FixGuard.defaultAssertionMarkers : markers
     }
 
     /// True when `path` is a relative path whose directories include one ending in a

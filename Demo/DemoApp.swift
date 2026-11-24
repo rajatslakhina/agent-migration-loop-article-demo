@@ -131,11 +131,19 @@ struct LoopTimelineView: View {
                 OutcomeBadge(outcome: report.outcome)
                 switch report.outcome {
                 case .autoMerge:
-                    Text("Test/mock-only diff, no agent edits, every run green.")
+                    Text("Test/mock-only diff, assertion counts kept, no agent edits, every run green.")
                 case .humanReview(let reasons):
-                    ForEach(reasons, id: \.self) { Text($0).font(.callout) }
+                    ForEach(Array(reasons.enumerated()), id: \.offset) { Text($0.element).font(.callout) }
                 case .handBack(let reason):
                     Text(reason).font(.callout)
+                }
+            }
+            // Shown before the loop: these are the lines a reviewer should compare first.
+            if !report.assertionReview.isEmpty {
+                Section("Assertions to compare") {
+                    ForEach(Array(report.assertionReview.enumerated()), id: \.offset) { item in
+                        Text(item.element).font(.caption.monospaced())
+                    }
                 }
             }
             Section("Loop") {

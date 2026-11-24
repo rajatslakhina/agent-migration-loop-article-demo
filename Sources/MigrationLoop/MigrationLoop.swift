@@ -33,6 +33,20 @@ public struct MigrationLoop: Sendable {
         for file in conversion.files where !contract.isInTestScope(file.path) {
             recorder.reviewReasons.append("Converter changed \(file.path), outside the test scope")
         }
+        // A mechanical conversion maps each XCTest assertion to one Swift Testing assertion,
+        // so each converted file should keep its assertion-line count. Only .swift adds count.
+        let markers = contract.assertionMarkers
+        for file in conversion.files {
+            let before = file.removed.filter { FixGuard.declaresAssertion($0, markers: markers) }.count
+            let after = file.path.hasSuffix(".swift")
+                ? file.added.filter { FixGuard.declaresAssertion($0, markers: markers, added: true) }.count : 0
+            if before != after {
+                recorder.reviewReasons.append(
+                    "Converter changed the assertion count in \(file.path): \(before) XCTest assertion line(s) became \(after)")
+                recorder.assertionReview.append("Converter, \(file.path): \(before) assertion line(s) became \(after)")
+                recorder.converterAssertionCounts.append(ConverterAssertionCount(path: file.path, before: before, after: after))
+            }
+        }
 
         // 2-3. Build, with bounded agent fixes.
         var attempts = 0
@@ -43,7 +57,7 @@ public struct MigrationLoop: Sendable {
             }
             attempts += 1
             let fix = executor.fixBuild(target: target, errors: errors, attempt: attempts)
-            if let rejection = recorder.apply(fix, attempt: attempts, phase: "build errors", contract: contract) {
+            if let rejection = recorder.apply(fix, attempt: attempts, phase: .buildErrors, contract: contract) {
                 return rejection
             }
             executor.apply(fix, target: target)
@@ -65,7 +79,7 @@ public struct MigrationLoop: Sendable {
             }
             attempts += 1
             let fix = executor.fixFailingTests(target: target, failing: failures, attempt: attempts)
-            if let rejection = recorder.apply(fix, attempt: attempts, phase: "failing tests", contract: contract) {
+            if let rejection = recorder.apply(fix, attempt: attempts, phase: .failingTests, contract: contract) {
                 return rejection
             }
             executor.apply(fix, target: target)
@@ -109,6 +123,9 @@ private struct Recorder {
     var reviewReasons: [String] = []
     var appliedFixes: [AgentFix] = []
     var followUps: [String] = []
+    var assertionReview: [String] = []
+    var converterAssertionCounts: [ConverterAssertionCount] = []
+    var fixAssertionChanges: [FixAssertionChange] = []
 
     init(target: String) {
         self.target = target
@@ -119,7 +136,8 @@ private struct Recorder {
     }
 
     /// Returns a hand-back report if the guard rejects the fix, otherwise records it and returns nil.
-    mutating func apply(_ fix: AgentFix, attempt: Int, phase: String, contract: LoopContract) -> LoopReport? {
+    mutating func apply(_ fix: AgentFix, attempt: Int, phase fixPhase: FixPhase, contract: LoopContract) -> LoopReport? {
+        let phase = fixPhase.rawValue
         let title = "Agent fixes \(phase) (attempt \(attempt) of \(contract.maxFixAttempts))"
         guard fix.patch.files.contains(where: { $0.added != $0.removed }) else {
             // Rerunning unchanged code would only test luck: a flaky test can pass 100 runs by chance.
@@ -129,6 +147,14 @@ private struct Recorder {
         let check = FixGuard.check(fix.patch, contract: contract)
         guard check.isClean else {
             let reasons = check.violations.map(\.description).joined(separator: "; ")
+            // Show the developer exactly which assertion lines the rejected fix touched.
+            if !check.assertionChanges.isEmpty {
+                fixAssertionChanges.append(FixAssertionChange(attempt: attempt, phase: fixPhase, rejected: true,
+                                                              diff: check.assertionChanges))
+            }
+            assertionReview.append(contentsOf: check.assertionChanges.lines.map {
+                "Rejected fix \(attempt) (\(phase)), \($0)"
+            })
             log(.agent, title, fix.note)
             log(.deterministic, "Fix guard", "Rejected: \(reasons)")
             return handBack("Agent fix rejected by the guard: \(reasons)")
@@ -139,6 +165,12 @@ private struct Recorder {
             followUps.append(followUp)
         }
         reviewReasons.append("Agent fixed \(phase): \(fix.note)")
+        if !check.assertionChanges.isEmpty {
+            reviewReasons.append("Fix \(attempt) (\(phase)) changed assertion lines; compare them before merging")
+            assertionReview.append(contentsOf: check.assertionChanges.lines.map { "Fix \(attempt) (\(phase)), \($0)" })
+            fixAssertionChanges.append(FixAssertionChange(attempt: attempt, phase: fixPhase, rejected: false,
+                                                          diff: check.assertionChanges))
+        }
         return nil
     }
 
@@ -149,7 +181,7 @@ private struct Recorder {
 
     mutating func finish() -> LoopReport {
         if reviewReasons.isEmpty {
-            log(.deterministic, "Open PR", "Auto-merge: test/mock-only diff, no agent edits, every run green")
+            log(.deterministic, "Open PR", "Auto-merge: test/mock-only diff, assertion counts kept, no agent edits, every run green")
             return report(.autoMerge)
         }
         log(.deterministic, "Open PR", "Tagged for human review with \(reviewReasons.count) reason(s)")
@@ -158,6 +190,7 @@ private struct Recorder {
 
     private func report(_ outcome: Outcome) -> LoopReport {
         LoopReport(target: target, events: events, outcome: outcome,
-                   appliedFixes: appliedFixes, followUps: followUps)
+                   appliedFixes: appliedFixes, followUps: followUps, assertionReview: assertionReview,
+                   converterAssertionCounts: converterAssertionCounts, fixAssertionChanges: fixAssertionChanges)
     }
 }
